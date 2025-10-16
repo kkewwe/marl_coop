@@ -9,3 +9,6 @@ In this file:
 
 To run: 
 python MARL_Emergent_Cooperation_Baseline.py --episodes <number, ex: 2000> --alpha <0-1.0> --seed <number, ex: 42>
+
+**Try extremes:** `--alpha 1.0` (selfish) vs `--alpha 0.0` (team). Compare plots in `runs/`.
+
