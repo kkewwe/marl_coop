@@ -24,6 +24,7 @@ class MultiAgentPredatorPrey:
     Capture: any predator on prey cell ends episode with team reward 1.
     """
     def __init__(self, cfg: GridConfig):
+        self.prey_captured = False
         self.cfg = cfg
         self.n_agents = cfg.n_predators
         self.action_space_n = 5
@@ -32,7 +33,6 @@ class MultiAgentPredatorPrey:
         self.pred_pos: List[Tuple[int,int]] = []
         self.prey_pos: Tuple[int,int] | None = None
 
-    # ── internal helpers ───────────────────────────────────────────────────────
     def _empty_grid(self):
         w, h = self.cfg.width, self.cfg.height
         walls = np.zeros((h, w), dtype=np.int32)
@@ -50,12 +50,12 @@ class MultiAgentPredatorPrey:
             if self.grid_walls[y,x] == 0 and (x,y) not in self.pred_pos and (self.prey_pos is None or (x,y) != self.prey_pos):
                 return (x,y)
 
-    # ── public API ─────────────────────────────────────────────────────────────
     def reset(self) -> Dict[str, np.ndarray]:
         self.step_count = 0
         self.grid_walls = self._empty_grid()
         self.pred_pos = [self._random_empty_cell() for _ in range(self.n_agents)]
         self.prey_pos = self._random_empty_cell()
+        self.prey_captured = False
         return self._get_obs()
 
     def step(self, actions: Dict[str, Action]):
@@ -101,6 +101,7 @@ class MultiAgentPredatorPrey:
             if (x,y) == self.prey_pos:
                 done = True
                 team_reward = 1.0
+                self.prey_captured = True
                 individual_rewards[i] = 1.0
                 break
         if self.step_count >= self.cfg.max_steps:

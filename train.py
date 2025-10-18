@@ -9,6 +9,7 @@ from .core.replay import ReplayBuffer, Transition
 from .metrics import action_entropy, coordination_index
 from .utils.seed import set_seed
 
+
 @dataclass
 class TrainConfig:
     episodes: int = 20000
@@ -26,13 +27,25 @@ class TrainConfig:
     seed: int = 0
 
 
+def _moving_avg(x, k: int = 100):
+    import numpy as _np
+    if len(x) == 0:
+        return _np.array([])
+    k = max(1, min(k, len(x)))
+    kernel = _np.ones(k) / k
+    return _np.convolve(_np.array(x, dtype=float), kernel, mode="valid")
+
+
 def train(cfg: TrainConfig, env_cfg: GridConfig):
     set_seed(cfg.seed)
     env = MultiAgentPredatorPrey(env_cfg)
     obs_dim = env.obs_dim()
     n_actions = env.action_space_n
 
-    agents: List[DQNAgent] = [DQNAgent(obs_dim, n_actions, lr=cfg.lr, gamma=cfg.gamma, device=cfg.device) for _ in range(env.n_agents)]
+    agents: List[DQNAgent] = [
+        DQNAgent(obs_dim, n_actions, lr=cfg.lr, gamma=cfg.gamma, device=cfg.device)
+        for _ in range(env.n_agents)
+    ]
     bufs: List[ReplayBuffer] = [ReplayBuffer(cfg.buffer_size) for _ in range(env.n_agents)]
 
     total_steps = 0
@@ -40,8 +53,9 @@ def train(cfg: TrainConfig, env_cfg: GridConfig):
     reward_variances: List[float] = []
     entropies: List[List[int]] = [[] for _ in range(env.n_agents)]
     coord_scores: List[float] = []
+    capture_history: List[int] = []   # ← NEW: 1 if prey captured this episode, else 0
 
-    for ep in range(1, cfg.episodes+1):
+    for ep in range(1, cfg.episodes + 1):
         obs = env.reset()
         ep_team_return = 0.0
         actions_trace = [[] for _ in range(env.n_agents)]
@@ -65,7 +79,15 @@ def train(cfg: TrainConfig, env_cfg: GridConfig):
                 indiv_rewards_trace[i].append(mixed)
 
             for i in range(env.n_agents):
-                bufs[i].add(Transition(obs[f"agent_{i}"], acts[f"agent_{i}"], mixed_rewards[i], next_obs[f"agent_{i}"], done))
+                bufs[i].add(
+                    Transition(
+                        obs[f"agent_{i}"],
+                        acts[f"agent_{i}"],
+                        mixed_rewards[i],
+                        next_obs[f"agent_{i}"],
+                        done,
+                    )
+                )
 
             obs = next_obs
             ep_team_return += R_team
@@ -84,11 +106,20 @@ def train(cfg: TrainConfig, env_cfg: GridConfig):
                 break
 
         episode_returns.append(ep_team_return)
+        ep_caught = 1 if ep_team_return > 0 else 0
+        capture_history.append(ep_caught)
+
         final_rewards = [sum(indiv_rewards_trace[i]) for i in range(env.n_agents)]
         reward_variances.append(float(np.var(final_rewards)))
+
         for i in range(env.n_agents):
             entropies[i].extend(actions_trace[i])
-        coord_scores.append(coordination_index(actions_trace[0], actions_trace[1] if env.n_agents>1 else actions_trace[0]))
+        coord_scores.append(
+            coordination_index(
+                actions_trace[0],
+                actions_trace[1] if env.n_agents > 1 else actions_trace[0],
+            )
+        )
 
         if ep % cfg.log_every == 0:
             import numpy as _np
@@ -97,12 +128,19 @@ def train(cfg: TrainConfig, env_cfg: GridConfig):
             mean_return = float(_np.mean(episode_returns[-cfg.log_every:]))
             mean_var = float(_np.mean(reward_variances[-cfg.log_every:]))
             mean_coord = float(_np.mean(coord_scores[-cfg.log_every:]))
-            print(f"Ep {ep:5d} | team_return(mean last {cfg.log_every}): {mean_return:.3f} | reward_var: {mean_var:.4f} | entropy: {mean_entropy:.3f} | coord: {mean_coord:.3f}")
+            mean_cap = float(_np.mean(capture_history[-cfg.log_every:]) * 100.0)
+            print(
+                f"Ep {ep:5d} | team_return(mean last {cfg.log_every}): {mean_return:.3f} "
+                f"| reward_var: {mean_var:.4f} | entropy: {mean_entropy:.3f} "
+                f"| coord: {mean_coord:.3f} | capture_rate: {mean_cap:.1f}%"
+            )
             entropies = [[] for _ in range(env.n_agents)]
 
     results = {
         "episode_returns": np.array(episode_returns),
         "reward_variances": np.array(reward_variances),
         "coord_scores": np.array(coord_scores),
+        "capture_history": np.array(capture_history, dtype=int),   # ← NEW
+        "capture_rate_ma": _moving_avg(capture_history, k=100),    # ← NEW (moving average)
     }
     return results
